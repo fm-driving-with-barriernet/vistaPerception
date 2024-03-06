@@ -78,6 +78,8 @@ def main(args):
     frame_idx = 0
     done = False
     while not done and frame_idx <= 300:
+        # print out current frame for debugging purposes
+        print(f"In frame {frame_idx}")
         # follow nominal trajectories for all agents
         actions = generate_human_actions(env.world)
 
