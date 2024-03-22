@@ -13,11 +13,10 @@ from vista.utils import logging
 from vista.tasks import MultiAgentBase
 from vista.utils import transform
 from BarrierNet.Driving.eval_tools.utils import extract_logs
-import sys
-# TODO: CHANGE THIS
-# sys.path.append('/home/gridsan/phmine/BarrierNet/Driving/models/')
-# from BarrierNet.Driving.models.barrier_net import LitModel
-# print("Successful import of BarrierNet")
+
+from BarrierNet.Driving.models.barrier_net import LitModel
+print("Successful import of BarrierNet")
+
 def main(args):
     # Initialize the simulator
     trace_config = dict(
