@@ -7,14 +7,17 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from shapely.geometry import box as Box
 from shapely import affinity
-
 import vista
 from vista.entities.sensors.camera_utils.ViewSynthesis import DepthModes
 from vista.utils import logging
 from vista.tasks import MultiAgentBase
 from vista.utils import transform
-
-
+from BarrierNet.Driving.eval_tools.utils import extract_logs
+import sys
+# TODO: CHANGE THIS
+# sys.path.append('/home/gridsan/phmine/BarrierNet/Driving/models/')
+# from BarrierNet.Driving.models.barrier_net import LitModel
+# print("Successful import of BarrierNet")
 def main(args):
     # Initialize the simulator
     trace_config = dict(
@@ -28,6 +31,7 @@ def main(args):
         wheel_base=2.78,
         steering_ratio=14.7,
         lookahead_road=True,
+        use_curvilinear_dynamics = True
     )
     examples_path = os.path.dirname(os.path.realpath(__file__))
     sensors_config = [
@@ -46,7 +50,6 @@ def main(args):
                        init_dist_range=[6., 10.],
                        init_lat_noise_range=[-1., 1.])
     display_config = dict(road_buffer_size=1000, )
-
     ego_car_config = copy.deepcopy(car_config)
     ego_car_config['lookahead_road'] = True
     env = MultiAgentBase(trace_paths=args.trace_paths,
@@ -56,7 +59,6 @@ def main(args):
                          (task_config['n_agents'] - 1),
                          task_config=task_config,
                          logging_level='DEBUG')
-
     # Run
     env.reset()
     # if args.use_display: #FIXME CHANGE THIS BACK
@@ -70,47 +72,38 @@ def main(args):
         artists = dict()
         fig.tight_layout()
         fig.show()
-
     has_video_writer = args.out_path is not None
     if has_video_writer:
         os.makedirs(os.path.dirname(args.out_path), exist_ok=True)
-    
     frame_idx = 0
     done = False
     while not done and frame_idx <= 300:
-        # print out current frame for debugging purposes
-        print(f"In frame {frame_idx}")
+        # see what extract_log does and what it outputs
+        ground_truth = extract_logs(env, env.world.agents[0]) # hopefully ego-car
+        print(ground_truth)
         # follow nominal trajectories for all agents
         actions = generate_human_actions(env.world)
-
         # step environment
         observations, rewards, dones, infos = env.step(actions)
         done = np.any(list(dones.values()))
-
         # fetch priviliged information (road, all cars' states)
         privileged_info = dict()
         for agent in env.world.agents:
             privileged_info[agent.id] = fetch_privileged_info(env.world, agent)
-
         if args.visualize_privileged_info:
             for ai, (aid, pinfo) in enumerate(privileged_info.items()):
                 agent = [_a for _a in env.world.agents if _a.id == aid][0]
-
                 update_road_vis(pinfo[0], axes[ai], artists, f'{aid}:road')
-
                 other_car_dims = [(_a.width, _a.length)
                                   for _a in env.world.agents
                                   if _a.id != agent.id]
                 ego_car_dim = (agent.width, agent.length)
                 update_car_vis(pinfo[1], other_car_dims, ego_car_dim, axes[ai],
                                artists, f'{aid}:ado_car')
-
                 print(aid, pinfo[1])
-
             fig.canvas.draw()
             if not args.use_display:
                 plt.pause(0.03)
-
         # vista visualization
         # if args.use_display: # we change this to always true
         if True: # FIXME hardcoded thisf
@@ -122,29 +115,24 @@ def main(args):
             key = cv2.waitKey(20)
             if key == ord('q'):
                 break
-
         print("Frame", frame_idx)
         frame_idx += 1
-
+    return ground_truths
 def state2poly(state, car_dim):
     """ Convert vehicle state to polygon """
     poly = Box(state[0] - car_dim[0] / 2., state[1] - car_dim[1] / 2.,
                state[0] + car_dim[0] / 2., state[1] + car_dim[1] / 2.)
     poly = affinity.rotate(poly, np.degrees(state[2]))
     return poly
-
-
 def update_car_vis(other_states, other_car_dims, ego_car_dim, ax, artists,
                    name_prefix):
     # clear car visualization at previous timestamp
     for existing_name in artists.keys():
         if name_prefix in existing_name:
             artists[existing_name].remove()
-
     # initialize some helper object
     colors = list(cm.get_cmap('Set1').colors)
     poly_i = 0
-
     # plot ego car (reference pose; always at the center)
     ego_poly = state2poly([0., 0., 0.], ego_car_dim)
     artists[f'{name_prefix}_{poly_i:0d}'], = ax.plot(
@@ -153,7 +141,6 @@ def update_car_vis(other_states, other_car_dims, ego_car_dim, ax, artists,
         c=colors[poly_i],
     )
     poly_i += 1
-
     # plot ado cars
     for other_state, other_car_dim in zip(other_states, other_car_dims):
         other_poly = state2poly(other_state, other_car_dim)
@@ -163,8 +150,6 @@ def update_car_vis(other_states, other_car_dims, ego_car_dim, ax, artists,
             c=colors[poly_i],
         )
         poly_i += 1
-
-
 def update_road_vis(road, ax, artists, name):
     if name in artists.keys():
         artists[name].remove()
@@ -175,8 +160,6 @@ def update_road_vis(road, ax, artists, name):
                              linestyle='dashed')
     ax.set_xlim(-10., 10.)
     ax.set_ylim(-20., 20.)
-
-
 def fetch_privileged_info(world, agent):
     # Get ado cars state w.r.t. agent
     other_agents = [_a for _a in world.agents if _a.id != agent.id]
@@ -186,16 +169,12 @@ def fetch_privileged_info(world, agent):
             other_agent.ego_dynamics.numpy()[:3],
             agent.ego_dynamics.numpy()[:3])
         other_states.append(other_latlongyaw)
-
     # Get road w.r.t. the agent
     road = np.array(agent.road)[:, :3].copy()
     ref_pose = agent.ego_dynamics.numpy()[:3]
     road_in_agent = np.array(
         [transform.compute_relative_latlongyaw(_v, ref_pose) for _v in road])
-
     return road_in_agent, other_states
-
-
 def generate_human_actions(world):
     actions = dict()
     for agent in world.agents:
@@ -204,8 +183,6 @@ def generate_human_actions(world):
             agent.trace.f_speed(agent.timestamp)
         ])
     return actions
-
-
 if __name__ == '__main__':
     # Parse Arguments
     parser = argparse.ArgumentParser(
@@ -232,5 +209,4 @@ if __name__ == '__main__':
                         default=False,
                         help='Visualize privileged information')
     args = parser.parse_args()
-
     main(args)
